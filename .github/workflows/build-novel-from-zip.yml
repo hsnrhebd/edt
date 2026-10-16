@@ -1,0 +1,157 @@
+name: Build Novel EdgeTunnel From ZIP
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BUILDER_ZIP: "edgeTunnel-novel-builder-v1-package.zip"
+  OBFUSCATION_VERSION: "novel-v1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check builder ZIP
+        run: |
+          set -e
+
+          if [ ! -f "$BUILDER_ZIP" ]; then
+            echo "ERROR: Builder ZIP not found: $BUILDER_ZIP"
+            exit 1
+          fi
+
+          if [ ! -s "$BUILDER_ZIP" ]; then
+            echo "ERROR: Builder ZIP is empty."
+            exit 1
+          fi
+
+          echo "Builder ZIP found:"
+          ls -lh "$BUILDER_ZIP"
+
+      - name: Extract builder
+        run: |
+          set -e
+
+          rm -rf .novel-builder
+          mkdir -p .novel-builder
+
+          unzip -q "$BUILDER_ZIP" -d .novel-builder
+
+          echo "Extracted files:"
+          find .novel-builder -maxdepth 3 -type f -print
+
+      - name: Locate builder
+        run: |
+          set -e
+
+          BUILDER="$(find .novel-builder -type f -name 'novel-build.mjs' -print -quit)"
+
+          if [ -z "$BUILDER" ]; then
+            echo "ERROR: novel-build.mjs not found inside ZIP."
+            exit 1
+          fi
+
+          echo "Builder found:"
+          echo "$BUILDER"
+
+          echo "BUILDER=$BUILDER" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download latest EdgeTunnel
+        run: |
+          set -e
+
+          curl -fL \
+            https://raw.githubusercontent.com/cmliu/edgetunnel/main/_worker.js \
+            -o origin-new.js
+
+          test -s origin-new.js
+
+          echo "Latest EdgeTunnel:"
+          wc -c origin-new.js
+
+      - name: Build novel container version
+        run: |
+          set -e
+
+          node "$BUILDER" origin-new.js _worker.js
+
+          test -s _worker.js
+
+      - name: Validate generated Worker
+        run: |
+          set -e
+
+          echo "Checking JavaScript syntax..."
+          node --check _worker.js
+
+          echo "Checking required Worker components..."
+
+          grep -q 'export default' _worker.js || {
+            echo "ERROR: export default missing."
+            exit 1
+          }
+
+          grep -q 'const _m=' _worker.js || {
+            echo "ERROR: _m index missing."
+            exit 1
+          }
+
+          grep -q 'new _F' _worker.js || {
+            echo "ERROR: startup loader missing."
+            exit 1
+          }
+
+          test -s _worker.js
+
+          echo "Validation passed."
+
+      - name: Show build statistics
+        run: |
+          echo "===== Build Statistics ====="
+          echo "Worker size:"
+          wc -c _worker.js
+
+          echo
+          echo "Container count:"
+          grep -o 'const _b=' _worker.js | wc -l
+
+          echo
+          echo "Index table:"
+          grep -o 'const _m=' _worker.js | wc -l
+
+          echo
+          echo "============================"
+
+      - name: Update source marker
+        run: |
+          set -e
+
+          mv origin-new.js origin.js
+
+          echo "$OBFUSCATION_VERSION" > .novel-version
+
+          echo "Novel builder version:"
+          cat .novel-version
+
+      - name: Commit generated files
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: main
+          commit_message: "chore: update EdgeTunnel novel build"
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          file_pattern: "_worker.js origin.js .novel-version"
