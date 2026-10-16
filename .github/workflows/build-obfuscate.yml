@@ -1,0 +1,97 @@
+name: Build Obfuscate EdgeTunnel
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download latest EdgeTunnel
+        run: |
+          set -e
+          curl -fL \
+            https://raw.githubusercontent.com/cmliu/edgetunnel/main/_worker.js \
+            -o origin-new.js
+
+          test -s origin-new.js
+          echo "Downloaded: $(wc -c < origin-new.js) bytes"
+
+      - name: Check source changes
+        id: source
+        run: |
+          if [ -f origin.js ] && cmp -s origin.js origin-new.js; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "EdgeTunnel source unchanged."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "EdgeTunnel source changed."
+          fi
+
+      - name: Install obfuscator
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          npm install --no-save javascript-obfuscator@5.9.0
+
+      - name: Obfuscate
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          set -e
+
+          npx javascript-obfuscator origin-new.js \
+            --output _worker.js \
+            --compact true \
+            --identifier-names-generator hexadecimal \
+            --rename-globals false \
+            --string-array true \
+            --string-array-encoding base64 \
+            --string-array-threshold 0.75 \
+            --transform-object-keys false \
+            --self-defending false \
+            --simplify true \
+            --seed 20261016
+
+          test -s _worker.js
+          echo "Generated: $(wc -c < _worker.js) bytes"
+
+      - name: Validate generated Worker
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          set -e
+
+          node --check _worker.js
+
+          grep -q "export default" _worker.js || {
+            echo "ERROR: _worker.js does not contain 'export default'."
+            exit 1
+          }
+
+          echo "Worker syntax check passed."
+
+      - name: Update source
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          mv origin-new.js origin.js
+
+      - name: Commit changes
+        if: steps.source.outputs.changed == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: main
+          commit_message: "chore: update and obfuscate EdgeTunnel"
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          file_pattern: "_worker.js origin.js"
