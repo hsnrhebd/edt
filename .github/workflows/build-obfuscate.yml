@@ -24,6 +24,7 @@ jobs:
       - name: Download latest EdgeTunnel
         run: |
           set -e
+
           curl -fL \
             https://raw.githubusercontent.com/cmliu/edgetunnel/main/_worker.js \
             -o origin-new.js
@@ -58,11 +59,24 @@ jobs:
             --identifier-names-generator hexadecimal \
             --rename-globals false \
             --string-array true \
-            --string-array-encoding base64 \
             --string-array-threshold 0.75 \
+            --string-array-rotate true \
+            --string-array-shuffle true \
+            --string-array-index-shift true \
+            --string-array-calls-transform true \
+            --string-array-calls-transform-threshold 0.75 \
+            --string-array-wrappers-count 1 \
+            --string-array-wrappers-chained-calls true \
+            --string-array-wrappers-parameters-max-count 2 \
+            --string-array-wrappers-type variable \
             --transform-object-keys false \
             --self-defending false \
             --simplify true \
+            --split-strings false \
+            --control-flow-flattening false \
+            --dead-code-injection false \
+            --numbers-to-expressions false \
+            --unicode-escape-sequence false \
             --seed 20261016
 
           test -s _worker.js
