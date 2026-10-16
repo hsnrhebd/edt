@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  OBFUSCATION_VERSION: "v3"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,24 +35,43 @@ jobs:
           test -s origin-new.js
           echo "Downloaded: $(wc -c < origin-new.js) bytes"
 
-      - name: Check source changes
-        id: source
+      - name: Check source and obfuscation changes
+        id: build
         run: |
-          if [ -f origin.js ] && cmp -s origin.js origin-new.js; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "EdgeTunnel source unchanged."
-          else
+          set -e
+
+          source_changed=false
+          obfuscation_changed=false
+
+          if [ ! -f origin.js ] || ! cmp -s origin.js origin-new.js; then
+            source_changed=true
+          fi
+
+          if [ ! -f .obfuscation-version ] || \
+             [ "$(cat .obfuscation-version)" != "$OBFUSCATION_VERSION" ]; then
+            obfuscation_changed=true
+          fi
+
+          echo "Source changed: $source_changed"
+          echo "Obfuscation changed: $obfuscation_changed"
+          echo "Current obfuscation version: $OBFUSCATION_VERSION"
+
+          if [ "$source_changed" = "true" ] || \
+             [ "$obfuscation_changed" = "true" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "EdgeTunnel source changed."
+            echo "Rebuild required."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No rebuild required."
           fi
 
       - name: Install obfuscator
-        if: steps.source.outputs.changed == 'true'
+        if: steps.build.outputs.changed == 'true'
         run: |
           npm install --no-save javascript-obfuscator@5.9.0
 
       - name: Obfuscate
-        if: steps.source.outputs.changed == 'true'
+        if: steps.build.outputs.changed == 'true'
         run: |
           set -e
 
@@ -59,6 +81,7 @@ jobs:
             --identifier-names-generator hexadecimal \
             --rename-globals false \
             --string-array true \
+            --string-array-encoding none \
             --string-array-threshold 0.75 \
             --string-array-rotate true \
             --string-array-shuffle true \
@@ -83,7 +106,7 @@ jobs:
           echo "Generated: $(wc -c < _worker.js) bytes"
 
       - name: Validate generated Worker
-        if: steps.source.outputs.changed == 'true'
+        if: steps.build.outputs.changed == 'true'
         run: |
           set -e
 
@@ -96,16 +119,21 @@ jobs:
 
           echo "Worker syntax check passed."
 
-      - name: Update source
-        if: steps.source.outputs.changed == 'true'
+      - name: Update source and version
+        if: steps.build.outputs.changed == 'true'
         run: |
+          set -e
+
           mv origin-new.js origin.js
+          echo "$OBFUSCATION_VERSION" > .obfuscation-version
+
+          echo "Obfuscation version: $OBFUSCATION_VERSION"
 
       - name: Commit changes
-        if: steps.source.outputs.changed == 'true'
+        if: steps.build.outputs.changed == 'true'
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
           branch: main
           commit_message: "chore: update and obfuscate EdgeTunnel"
           commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-          file_pattern: "_worker.js origin.js"
+          file_pattern: "_worker.js origin.js .obfuscation-version"
