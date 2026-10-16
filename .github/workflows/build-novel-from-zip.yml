@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 env:
-  BUILDER_ZIP: "edgeTunnel-novel-builder-v1-package.zip"
   OBFUSCATION_VERSION: "novel-v1"
 
 jobs:
@@ -19,55 +18,88 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Check builder ZIP
+      - name: Locate builder ZIP
         run: |
           set -e
 
-          if [ ! -f "$BUILDER_ZIP" ]; then
-            echo "ERROR: Builder ZIP not found: $BUILDER_ZIP"
+          echo "Searching for novel builder ZIP..."
+
+          mapfile -t ZIPS < <(
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 1 \
+              -type f \
+              -iname "*novel-builder*.zip" \
+              -print
+          )
+
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "ERROR: No novel builder ZIP found."
+            echo
+            echo "Files in repository root:"
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
 
+          if [ "${#ZIPS[@]}" -gt 1 ]; then
+            echo "ERROR: Multiple novel builder ZIP files found:"
+            printf '%s\n' "${ZIPS[@]}"
+            echo
+            echo "Please keep only one *novel-builder*.zip in repository root."
+            exit 1
+          fi
+
+          BUILDER_ZIP="${ZIPS[0]}"
+
           if [ ! -s "$BUILDER_ZIP" ]; then
-            echo "ERROR: Builder ZIP is empty."
+            echo "ERROR: Builder ZIP is empty:"
+            echo "$BUILDER_ZIP"
             exit 1
           fi
 
           echo "Builder ZIP found:"
           ls -lh "$BUILDER_ZIP"
 
+          echo "BUILDER_ZIP=$BUILDER_ZIP" >> "$GITHUB_ENV"
+
       - name: Extract builder
         run: |
           set -e
 
-          rm -rf .novel-builder
-          mkdir -p .novel-builder
+          rm -rf "$GITHUB_WORKSPACE/.novel-builder"
+          mkdir -p "$GITHUB_WORKSPACE/.novel-builder"
 
-          unzip -q "$BUILDER_ZIP" -d .novel-builder
+          unzip -q "$BUILDER_ZIP" \
+            -d "$GITHUB_WORKSPACE/.novel-builder"
 
           echo "Extracted files:"
-          find .novel-builder -maxdepth 3 -type f -print
+          find "$GITHUB_WORKSPACE/.novel-builder" \
+            -maxdepth 4 \
+            -type f \
+            -print
 
-      - name: Locate builder
+      - name: Locate builder script
         run: |
           set -e
 
-          BUILDER="$(find .novel-builder -type f -name 'novel-build.mjs' -print -quit)"
+          BUILDER="$(find "$GITHUB_WORKSPACE/.novel-builder" \
+            -type f \
+            -name "novel-build.mjs" \
+            -print -quit)"
 
           if [ -z "$BUILDER" ]; then
-            echo "ERROR: novel-build.mjs not found inside ZIP."
+            echo "ERROR: novel-build.mjs not found inside builder ZIP."
             exit 1
           fi
 
-          echo "Builder found:"
+          echo "Builder script:"
           echo "$BUILDER"
 
           echo "BUILDER=$BUILDER" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -79,18 +111,28 @@ jobs:
             https://raw.githubusercontent.com/cmliu/edgetunnel/main/_worker.js \
             -o origin-new.js
 
-          test -s origin-new.js
+          if [ ! -s origin-new.js ]; then
+            echo "ERROR: Downloaded EdgeTunnel source is empty."
+            exit 1
+          fi
 
-          echo "Latest EdgeTunnel:"
+          echo "Latest EdgeTunnel source:"
           wc -c origin-new.js
 
-      - name: Build novel container version
+      - name: Build novel version
         run: |
           set -e
 
+          echo "Running builder..."
           node "$BUILDER" origin-new.js _worker.js
 
-          test -s _worker.js
+          if [ ! -s _worker.js ]; then
+            echo "ERROR: Builder did not generate _worker.js."
+            exit 1
+          fi
+
+          echo "Generated Worker:"
+          wc -c _worker.js
 
       - name: Validate generated Worker
         run: |
@@ -99,45 +141,48 @@ jobs:
           echo "Checking JavaScript syntax..."
           node --check _worker.js
 
-          echo "Checking required Worker components..."
+          echo "Checking Worker structure..."
 
-          grep -q 'export default' _worker.js || {
+          grep -q "export default" _worker.js || {
             echo "ERROR: export default missing."
             exit 1
           }
 
-          grep -q 'const _m=' _worker.js || {
-            echo "ERROR: _m index missing."
+          grep -q "const _m=" _worker.js || {
+            echo "ERROR: _m index table missing."
             exit 1
           }
 
-          grep -q 'new _F' _worker.js || {
+          grep -q "new _F" _worker.js || {
             echo "ERROR: startup loader missing."
             exit 1
           }
 
-          test -s _worker.js
-
-          echo "Validation passed."
+          echo "Worker validation passed."
 
       - name: Show build statistics
         run: |
-          echo "===== Build Statistics ====="
-          echo "Worker size:"
+          echo "========== BUILD STATISTICS =========="
+
+          echo "Original source:"
+          wc -c origin-new.js
+
+          echo
+          echo "Generated Worker:"
           wc -c _worker.js
 
           echo
-          echo "Container count:"
-          grep -o 'const _b=' _worker.js | wc -l
+          echo "Container table:"
+          grep -o "const _b=" _worker.js | wc -l
 
           echo
           echo "Index table:"
-          grep -o 'const _m=' _worker.js | wc -l
+          grep -o "const _m=" _worker.js | wc -l
 
           echo
-          echo "============================"
+          echo "======================================"
 
-      - name: Update source marker
+      - name: Update source files
         run: |
           set -e
 
