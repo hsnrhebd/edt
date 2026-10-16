@@ -1,0 +1,49 @@
+name: Deploy Obfuscated EdgeTunnel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Worker file
+        run: |
+          set -e
+
+          if [ ! -f "_worker.js" ]; then
+            echo "ERROR: _worker.js not found."
+            exit 1
+          fi
+
+          if [ ! -s "_worker.js" ]; then
+            echo "ERROR: _worker.js is empty."
+            exit 1
+          fi
+
+          echo "Worker file found:"
+          wc -c "_worker.js"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy _worker.js --name nameless-unit
+
+      - name: Deployment finished
+        run: |
+          echo "Cloudflare Worker deployment completed."
