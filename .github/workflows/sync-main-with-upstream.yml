@@ -1,0 +1,110 @@
+name: Sync Main With CM Upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add CM upstream
+        run: |
+          set -e
+
+          git remote remove upstream 2>/dev/null || true
+
+          git remote add upstream \
+            https://github.com/cmliu/edgetunnel.git
+
+          echo "Fetching CM upstream..."
+          git fetch upstream main --prune
+
+      - name: Create backup branch
+        run: |
+          set -e
+
+          BACKUP="backup-before-upstream-sync-$(date -u +%Y%m%d-%H%M%S)"
+
+          git branch "$BACKUP"
+          git push origin "$BACKUP"
+
+          echo "Backup branch created:"
+          echo "$BACKUP"
+
+          echo "BACKUP_BRANCH=$BACKUP" >> "$GITHUB_ENV"
+
+      - name: Compare repositories
+        run: |
+          set -e
+
+          echo "========== CURRENT =========="
+          git rev-parse HEAD
+
+          echo
+          echo "========== UPSTREAM =========="
+          git rev-parse upstream/main
+
+          echo
+          echo "========== DIFFERENCES =========="
+
+          git diff --stat HEAD upstream/main || true
+
+          echo
+          echo "Files changed:"
+          git diff --name-status HEAD upstream/main || true
+
+      - name: Replace main with upstream main
+        run: |
+          set -e
+
+          echo "Resetting local main to CM upstream..."
+
+          git reset --hard upstream/main
+
+          git clean -fdx
+
+      - name: Verify exact match
+        run: |
+          set -e
+
+          LOCAL="$(git rev-parse HEAD)"
+          UPSTREAM="$(git rev-parse upstream/main)"
+
+          echo "Local:    $LOCAL"
+          echo "Upstream: $UPSTREAM"
+
+          if [ "$LOCAL" != "$UPSTREAM" ]; then
+            echo "ERROR: main does not exactly match upstream/main."
+            exit 1
+          fi
+
+          echo
+          echo "======================================"
+          echo "MAIN IS NOW EXACTLY THE SAME AS CM."
+          echo "======================================"
+
+      - name: Push clean main
+        run: |
+          set -e
+
+          git push origin main --force
+
+          echo
+          echo "Main synchronized successfully."
+          echo "Backup branch:"
+          echo "$BACKUP_BRANCH"
