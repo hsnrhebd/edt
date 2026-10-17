@@ -1,0 +1,110 @@
+name: Build JShaman V2.1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check source
+        run: |
+          set -e
+          test -s origin.js || {
+            echo "ERROR: origin.js is missing or empty."
+            exit 1
+          }
+          echo "Source:"
+          wc -c origin.js
+
+      - name: Locate builder ZIP
+        run: |
+          set -e
+          mapfile -t zips < <(
+            find . -maxdepth 1 -type f \
+              -iname "*jshaman*v2*.zip" -print
+          )
+
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "ERROR: No JShaman V2 builder ZIP found."
+            exit 1
+          fi
+
+          if [ "${#zips[@]}" -gt 1 ]; then
+            echo "ERROR: Multiple JShaman V2 ZIPs found:"
+            printf '%s\n' "${zips[@]}"
+            exit 1
+          fi
+
+          echo "BUILDER_ZIP=${zips[0]}" >> "$GITHUB_ENV"
+
+      - name: Extract builder
+        run: |
+          set -e
+
+          rm -rf .jshaman-builder
+          mkdir .jshaman-builder
+
+          unzip -q "$BUILDER_ZIP" \
+            -d .jshaman-builder
+
+          BUILDER="$(find .jshaman-builder \
+            -type f \
+            -name novel-build.mjs \
+            -print -quit)"
+
+          if [ -z "$BUILDER" ]; then
+            echo "ERROR: novel-build.mjs not found."
+            exit 1
+          fi
+
+          echo "BUILDER=$BUILDER" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install parser
+        run: |
+          set -e
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund @babel/parser
+
+      - name: Build
+        run: |
+          set -e
+          node "$BUILDER" origin.js _worker.js
+
+      - name: Final diagnostics
+        run: |
+          set -e
+
+          test -s _worker.js
+          node --check _worker.js
+
+          echo "========== BUILD RESULT =========="
+
+          echo "origin.js:"
+          wc -c origin.js
+
+          echo "_worker.js:"
+          wc -c _worker.js
+
+          echo "=================================="
+
+      - name: Commit result
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: main
+          commit_message: "build: JShaman V2.1 protected worker"
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          file_pattern: "_worker.js"
